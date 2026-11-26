@@ -74,3 +74,15 @@ model RegistroOtp {
 
   @@map("registro_otp")
 }
+
+model UsuarioSistema {
+  idUsuario     Int       @id @default(autoincrement()) @map("id_usuario")
+  username      String    @unique @db.VarChar(50)
+  passwordHash  String    @map("password_hash") @db.VarChar(255)
+  nombreCompleto String   @map("nombre_completo") @db.VarChar(150)
+  rol           String    @db.VarChar(20) // 'ADMIN' o 'GARITA'
+  activo        Boolean   @default(true)
+  fechaCreacion DateTime  @default(now()) @map("fecha_creacion") @db.Timestamp(6)
+
+  @@map("usuarios_sistema")
+}
