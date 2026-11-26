@@ -8,18 +8,19 @@ datasource db {
 }
 
 model EstudianteHabilitado {
-  idEstudiante           Int                     @id @default(autoincrement()) @map("id_estudiante")
-  codigoAlumno           String                  @unique @map("codigo_alumno") @db.VarChar(15)
-  correoInstitucional    String                  @unique @map("correo_institucional") @db.VarChar(100)
-  nombreCompleto         String                  @map("nombre_completo") @db.VarChar(150)
-  estaAlDiaPagos         Boolean?                @default(true) @map("esta_al_dia_pagos")
-  porcentajeAsistencia   Decimal                 @map("porcentaje_asistencia") @db.Decimal(5, 2)
-  promedioPonderado      Decimal                 @map("promedio_ponderado") @db.Decimal(4, 2)
-  esAptoParking          Boolean?                @default(dbgenerated("((esta_al_dia_pagos = true) AND (porcentaje_asistencia >= 70.00) AND (promedio_ponderado >= 14.00))")) @map("es_apto_parking")
-  ultimaActualizacionEtl DateTime?               @default(now()) @map("ultima_actualizacion_etl") @db.Timestamp(6)
-  penalizaciones         HistorialPenalizacion[]
-  otps                   RegistroOtp[]
-  reservas               Reserva[]
+  id_estudiante            Int                     @id @default(autoincrement())
+  codigoAlumno             String                  @unique @map("codigo_alumno") @db.VarChar(15)
+  correoInstitucional      String                  @unique @map("correo_institucional") @db.VarChar(100)
+  nombreCompleto           String                  @map("nombre_completo") @db.VarChar(150)
+  estaAlDiaPagos           Boolean?                @default(true) @map("esta_al_dia_pagos")
+  porcentajeAsistencia     Decimal                 @map("porcentaje_asistencia") @db.Decimal(5, 2)
+  promedioPonderado        Decimal                 @map("promedio_ponderado") @db.Decimal(4, 2)
+  esAptoParking            Boolean?                @default(dbgenerated("((esta_al_dia_pagos = true) AND (porcentaje_asistencia >= 70.00) AND (promedio_ponderado >= 14.00))")) @map("es_apto_parking")
+  ultima_actualizacion_etl DateTime?               @default(now()) @db.Timestamp(6)
+  penalizaciones           HistorialPenalizacion[]
+  registrosOtp             RegistroOtp[]
+  reservas                 Reserva[]
+  perteneceMerito          String?                 @default("-") @map("pertenece_merito")
 
   @@index([correoInstitucional], map: "idx_estudiantes_correo")
   @@map("estudiantes_habilitados")
@@ -76,13 +77,13 @@ model RegistroOtp {
 }
 
 model UsuarioSistema {
-  idUsuario     Int       @id @default(autoincrement()) @map("id_usuario")
-  username      String    @unique @db.VarChar(50)
-  passwordHash  String    @map("password_hash") @db.VarChar(255)
+  idUsuario      Int      @id @default(autoincrement()) @map("id_usuario")
+  username       String   @unique @db.VarChar(50)
+  passwordHash   String   @map("password_hash") @db.VarChar(255)
   nombreCompleto String   @map("nombre_completo") @db.VarChar(150)
-  rol           String    @db.VarChar(20) // 'ADMIN' o 'GARITA'
-  activo        Boolean   @default(true)
-  fechaCreacion DateTime  @default(now()) @map("fecha_creacion") @db.Timestamp(6)
+  rol            String   @db.VarChar(20)
+  activo         Boolean  @default(true)
+  fechaCreacion  DateTime @default(now()) @map("fecha_creacion") @db.Timestamp(6)
 
   @@map("usuarios_sistema")
 }
