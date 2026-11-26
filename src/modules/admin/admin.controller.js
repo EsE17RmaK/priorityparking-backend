@@ -1,5 +1,6 @@
 const garitaService = require('./garita.service');
 const cargaCsvService = require('./carga-csv.service');
+const aforoService = require('./aforo.service');
 
 async function registrarGarita(req, res) {
     const { username, password, nombreCompleto } = req.body;
@@ -54,8 +55,69 @@ async function subirPadronAlumnos(req, res) {
     }
 }
 
+async function obtenerAforo(req, res) {
+    try {
+        const estado = await aforoService.obtenerEstadoAforoHoy();
+        return res.status(200).json(estado);
+    } catch (error) {
+        console.error('[Admin Controller Error - Aforo]:', error.message);
+        return res.status(500).json({ error: 'Error al obtener el estado del aforo.' });
+    }
+}
+
+async function configurarAforoMensual(req, res) {
+    const { mesAnio, capacidadMensual } = req.body;
+
+    if (capacidadMensual === undefined || capacidadMensual === null) {
+        return res.status(400).json({ error: 'Debe indicar la capacidadMensual.' });
+    }
+
+    try {
+        const adminUsername = req.usuario?.codigo || 'UTP-ADMIN';
+        const config = await aforoService.actualizarAforoMensual({
+            mesAnio,
+            capacidadMensual,
+            adminUsername
+        });
+
+        return res.status(200).json({
+            mensaje: `Aforo mensual actualizado a ${config.capacidadMensual} espacios.`,
+            configuracion: config
+        });
+    } catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
+}
+
+async function registrarBloqueoGarita(req, res) {
+    const { cuposBloqueados, motivo } = req.body;
+
+    if (cuposBloqueados === undefined || cuposBloqueados === null) {
+        return res.status(400).json({ error: 'Debe indicar la cantidad de cuposBloqueados.' });
+    }
+
+    try {
+        const garitaUsername = req.usuario?.codigo || 'UTP-GARITA';
+        const bloqueo = await aforoService.registrarBloqueoDiario({
+            cuposBloqueados,
+            motivo,
+            garitaUsername
+        });
+
+        return res.status(200).json({
+            mensaje: `Bloqueo operativo del día actualizado (${bloqueo.cuposBloqueados} cupos).`,
+            bloqueo
+        });
+    } catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
+}
+
 module.exports = {
     registrarGarita,
     obtenerGaritas,
-    subirPadronAlumnos
+    subirPadronAlumnos,
+    obtenerAforo,
+    configurarAforoMensual,
+    registrarBloqueoGarita
 };

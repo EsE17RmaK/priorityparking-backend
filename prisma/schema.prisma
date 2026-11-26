@@ -87,3 +87,24 @@ model UsuarioSistema {
 
   @@map("usuarios_sistema")
 }
+
+model ConfiguracionAforo {
+  idConfiguracion    Int      @id @default(autoincrement()) @map("id_configuracion")
+  mesAnio            String   @unique @map("mes_anio") @db.VarChar(7)
+  capacidadMensual   Int      @map("capacidad_mensual")
+  actualizadoPor     String?  @map("actualizado_por") @db.VarChar(50)
+  fechaActualizacion DateTime @default(now()) @updatedAt @map("fecha_actualizacion") @db.Timestamp(6)
+
+  @@map("configuracion_aforo")
+}
+
+model BloqueoDiario {
+  idBloqueo       Int      @id @default(autoincrement()) @map("id_bloqueo")
+  fecha           DateTime @unique @db.Date
+  cuposBloqueados Int      @default(0) @map("cupos_bloqueados")
+  motivo          String?  @db.VarChar(255)
+  registradoPor   String?  @map("registrado_por") @db.VarChar(50)
+  fechaRegistro   DateTime @default(now()) @map("fecha_registro") @db.Timestamp(6)
+
+  @@map("bloqueos_diarios")
+}

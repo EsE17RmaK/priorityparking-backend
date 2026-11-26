@@ -29,10 +29,11 @@ router.post('/auth/verificar-otp', authController.verificarOtp);
  * =================================================================
  */
 
-// 1. Garita y Espacios
+// 1. Garita, Aforo Operativo y Espacios
 router.get('/garita/espacios', verificarRol(['ESTUDIANTE', 'GARITA', 'ADMIN']), reservasController.obtenerEspaciosGarita);
 router.post('/garita/registrar-ingreso', verificarRol(['GARITA', 'ADMIN']), reservasController.registrarIngresoVehiculo);
 router.post('/garita/registrar-salida', verificarRol(['GARITA', 'ADMIN']), reservasController.registrarSalidaVehiculo);
+router.post('/garita/bloqueo-diario', verificarRol(['GARITA', 'ADMIN']), adminController.registrarBloqueoGarita);
 
 // 2. Reservas de Estudiantes
 router.post('/reservas/crear', verificarRol(['ESTUDIANTE']), reservasController.crearReservaAlumno);
@@ -40,6 +41,8 @@ router.post('/reservas/cancelar', verificarRol(['ESTUDIANTE']), reservasControll
 router.get('/reservas/mis-reservas', verificarRol(['ESTUDIANTE', 'ADMIN']), reservasController.listarMisReservas);
 
 // 3. Administración UTP (Exclusivo rol ADMIN)
+router.get('/admin/aforo', verificarRol(['ADMIN', 'GARITA']), adminController.obtenerAforo);
+router.put('/admin/aforo', verificarRol(['ADMIN']), adminController.configurarAforoMensual);
 router.post('/admin/garitas', verificarRol(['ADMIN']), adminController.registrarGarita);
 router.get('/admin/garitas', verificarRol(['ADMIN']), adminController.obtenerGaritas);
 router.post('/admin/estudiantes/csv', verificarRol(['ADMIN']), upload.single('archivoCsv'), adminController.subirPadronAlumnos);
