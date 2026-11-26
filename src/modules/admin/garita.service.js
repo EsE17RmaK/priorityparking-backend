@@ -42,9 +42,9 @@ async function listarOperadoresGarita() {
             username: true,
             nombreCompleto: true,
             activo: true,
-            creadoEn: true
+            fechaCreacion: true
         },
-        orderBy: { creadoEn: 'desc' }
+        orderBy: { fechaCreacion: 'desc' }
     });
 }
 
