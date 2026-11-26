@@ -1,24 +1,20 @@
 // src/modules/reservas/reservas.controller.js
-const pool = require('../../config/database'); 
+const pool = require('../../config/database');
 const reservasService = require('./reservas.service');
 
 /**
- * Validar Ingreso en Garita controlando los 20 minutos de tolerancia estricta
+ * Validar Ingreso en Garita controlando los 20 minutos de tolerancia estricta (por código/QR)
  * URL: POST /api/garita/registrar-ingreso
  */
 async function registrarIngresoVehiculo(req, res) {
     const codigoAlumnoLimpio = req.body.codigo_alumno || req.body.codigoAlumno;
-    const idEspacioLimpio = req.body.id_espacio || req.body.idEspacio;
 
-    if (!codigoAlumnoLimpio || !idEspacioLimpio) {
-        return res.status(400).json({ error: 'Faltan parámetros requeridos (codigo_alumno, id_espacio).' });
+    if (!codigoAlumnoLimpio) {
+        return res.status(400).json({ error: 'Debe ingresar el código de alumno o escanear el QR.' });
     }
 
-    const parametroAlumno = String(codigoAlumnoLimpio).trim();
-    const parametroEspacio = String(idEspacioLimpio).trim();
+    const parametroAlumno = String(codigoAlumnoLimpio).trim().toUpperCase();
     const parametroFecha = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
-
-    console.log(`[Garita] Buscando reserva: Alumno=${parametroAlumno}, Slot=${parametroEspacio}, Fecha=${parametroFecha}`);
 
     const client = await pool.connect();
     try {
@@ -31,17 +27,16 @@ async function registrarIngresoVehiculo(req, res) {
                         > hora_llegada_programada + interval '20 minutes') AS vencida
              FROM reservas
              WHERE codigo_alumno = $1
-               AND id_espacio = $2
-               AND fecha_reserva = $3::date
+               AND fecha_reserva = $2::date
                AND estado_reserva = 'PENDIENTE'
              FOR UPDATE`,
-            [parametroAlumno, parametroEspacio, parametroFecha]
+            [parametroAlumno, parametroFecha]
         );
 
         if (rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(400).json({
-                error: `No se localizó una reserva PENDIENTE para el alumno ${parametroAlumno} en el slot ${parametroEspacio} para hoy (${parametroFecha}).`
+                error: `No se localizó una reserva PENDIENTE para el alumno ${parametroAlumno} hoy (${parametroFecha}).`
             });
         }
 
@@ -53,10 +48,6 @@ async function registrarIngresoVehiculo(req, res) {
                 [idReserva]
             );
             await client.query(
-                `UPDATE espacios_estacionamiento SET estado = 'DISPONIBLE' WHERE id_espacio = $1`,
-                [parametroEspacio]
-            );
-            await client.query(
                 `INSERT INTO historial_penalizaciones (codigo_alumno, motivo, fecha_fin)
                  VALUES ($1, $2, now() + interval '3 days')`,
                 [parametroAlumno, 'Excedió los 20 minutos de tolerancia en garita.']
@@ -64,37 +55,23 @@ async function registrarIngresoVehiculo(req, res) {
             await client.query('COMMIT');
 
             return res.status(403).json({
-                error: `Acceso denegado: excediste los 20 minutos de tolerancia (hora programada: ${horaProgramada}). El espacio fue liberado.`
+                error: `Acceso denegado: excediste los 20 minutos de tolerancia (hora programada: ${horaProgramada}). Cupo liberado al aforo.`
             });
         }
 
         await client.query(
-            `UPDATE reservas SET estado_reserva = 'COMPLETADA' WHERE id_reserva = $1`,
+            `UPDATE reservas SET estado_reserva = 'EN_CURSO' WHERE id_reserva = $1`,
             [idReserva]
         );
 
-        const upd = await client.query(
-            `UPDATE espacios_estacionamiento SET estado = 'OCUPADO'
-             WHERE id_espacio = $1 AND estado = 'RESERVADO'`,
-            [parametroEspacio]
-        );
-        if (upd.rowCount === 0) {
-            throw new Error(`El espacio ${parametroEspacio} no estaba en estado RESERVADO`);
-        }
-
         await client.query('COMMIT');
 
-        console.log(`[Garita] Ingreso autorizado: alumno ${parametroAlumno}, slot ${parametroEspacio}.`);
         return res.status(200).json({
-            mensaje: `Ingreso validado con éxito. El slot ${parametroEspacio} ahora está OCUPADO.`
+            mensaje: `Ingreso validado para ${parametroAlumno}. (+1 vehículo en planta)`
         });
-
     } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
-        console.error('[Garita] ERROR REAL:', error.message,
-            '\nDetalle:', error.detail,
-            '\nConstraint:', error.constraint,
-            '\nStack:', error.stack);
+        console.error('[Garita] ERROR:', error.message);
         return res.status(500).json({ error: 'Fallo interno al procesar el ingreso vehicular en garita.' });
     } finally {
         client.release();
@@ -102,77 +79,76 @@ async function registrarIngresoVehiculo(req, res) {
 }
 
 /**
- * Registra la salida del vehículo liberando el slot para el mapa web.
+ * Registra la salida del vehículo liberando un cupo en el aforo del día.
  * URL: POST /api/garita/registrar-salida
  */
 async function registrarSalidaVehiculo(req, res) {
-    const { id_espacio } = req.body;
+    const codigoAlumno = req.body.codigo_alumno || req.body.codigoAlumno;
 
-    if (!id_espacio) {
-        return res.status(400).json({ error: 'Falta el parámetro requerido (id_espacio).' });
+    if (!codigoAlumno) {
+        return res.status(400).json({ error: 'Falta el parámetro requerido (codigo_alumno).' });
     }
 
     try {
-        await reservasService.ejecutarSalidaTransaccional(id_espacio);
-        
-        console.log(`[Garita Control] Espacio ${id_espacio} liberado y disponible en red.`);
-        return res.status(200).json({ mensaje: `Salida procesada. Espacio ${id_espacio} liberado de inmediato.` });
-        
+        const parametroAlumno = String(codigoAlumno).trim().toUpperCase();
+        await reservasService.ejecutarSalidaPorAlumno(parametroAlumno);
+
+        return res.status(200).json({
+            mensaje: `Salida procesada para ${parametroAlumno}. (-1 vehículo en planta, cupo liberado)`
+        });
     } catch (error) {
-        console.error('[Reservas Controller Error]:', error.message);
-        return res.status(500).json({ error: 'Fallo interno al procesar la salida vehicular en garita.' });
+        console.error('[Reservas Controller Error - Salida]:', error.message);
+        return res.status(400).json({ error: error.message || 'Fallo interno al procesar la salida vehicular.' });
     }
 }
 
 /**
- * Obtiene el mapa de espacios en tiempo real.
+ * Obtiene el movimiento operativo diario (reservas pendientes y vehículos en planta).
  * URL: GET /api/garita/espacios
  */
 async function obtenerEspaciosGarita(req, res) {
     try {
-        const espacios = await reservasService.obtenerTodosLosEspacios(); 
-        return res.status(200).json(espacios);
+        const movimientos = await reservasService.obtenerMonitorDiarioGarita();
+        return res.status(200).json(movimientos);
     } catch (error) {
         console.error('[Reservas Controller Error]:', error.message);
-        return res.status(500).json({ error: 'Fallo interno al obtener el mapa de espacios.' });
+        return res.status(500).json({ error: 'Fallo interno al obtener el monitor diario.' });
     }
 }
 
 /**
- * Procesa la solicitud del alumno para reservar un slot del mapa eligiendo su fecha de llegada.
+ * Procesa la solicitud del alumno para reservar cupo por aforo (sin slot físico).
  * URL: POST /api/reservas/crear
  */
 async function crearReservaAlumno(req, res) {
-    const { codigo_alumno, id_espacio, otp_verificado, fecha_reserva, hora_llegada } = req.body;
+    const { codigo_alumno, otp_verificado, fecha_reserva, hora_llegada } = req.body;
 
-    if (!codigo_alumno || !id_espacio || !otp_verificado || !fecha_reserva || !hora_llegada) {
-        return res.status(400).json({ 
-            error: 'Faltan parámetros obligatorios (codigo_alumno, id_espacio, otp_verificado, fecha_reserva, hora_llegada).' 
+    if (!codigo_alumno || !fecha_reserva || !hora_llegada) {
+        return res.status(400).json({
+            error: 'Faltan parámetros obligatorios (codigo_alumno, fecha_reserva, hora_llegada).'
         });
     }
 
     try {
         const resultado = await reservasService.ejecutarReservaTransaccional(
-            codigo_alumno,
-            id_espacio,
-            otp_verificado,
+            String(codigo_alumno).trim().toUpperCase(),
+            otp_verificado || '000000',
             fecha_reserva,
             hora_llegada
         );
 
-        return res.status(200).json({ 
+        return res.status(200).json({
             success: true,
-            mensaje: `Reserva confirmada. El slot ${id_espacio} está separado para el día ${fecha_reserva} a las ${hora_llegada}. Tienes 20 min de tolerancia.`,
+            mensaje: `Cupo reservado con éxito para el día ${fecha_reserva} a las ${hora_llegada}. Tienes 20 min de tolerancia.`,
             reserva: resultado.reserva,
             qrCode: resultado.qrCode
         });
-        
     } catch (error) {
         console.error('[Reservas Controller Error]:', error.message);
         if (error.message.includes('unique_reserva_por_dia_alumno') || error.code === '23505') {
             return res.status(400).json({ error: `Ya cuentas con una reserva registrada para el día ${fecha_reserva}.` });
         }
-        return res.status(500).json({ error: error.message || 'Fallo interno al procesar la reserva.' });
+        return res.status(400).json({ error: error.message || 'Fallo interno al procesar la reserva.' });
     }
 }
 
@@ -188,19 +164,22 @@ async function cancelarReservaAlumno(req, res) {
     }
 
     try {
-        await reservasService.ejecutarCancelacionTransaccional(codigo_alumno, fecha_reserva);
-        
-        return res.status(200).json({ 
-            mensaje: `Reserva para el día ${fecha_reserva} cancelada con éxito. El espacio ha sido liberado para la comunidad.` 
+        await reservasService.ejecutarCancelacionTransaccional(
+            String(codigo_alumno).trim().toUpperCase(),
+            fecha_reserva
+        );
+
+        return res.status(200).json({
+            mensaje: `Reserva para el día ${fecha_reserva} cancelada con éxito. El cupo vuelve al aforo disponible.`
         });
     } catch (error) {
         console.error('[Cancelación Controller Error]:', error.message);
-        return res.status(500).json({ error: error.message || 'Fallo interno al procesar la cancelación.' });
+        return res.status(400).json({ error: error.message || 'Fallo interno al procesar la cancelación.' });
     }
 }
 
 /**
- * Devuelve todas las reservas de un estudiante para la pantalla E06 (Mis Reservas).
+ * Devuelve todas las reservas de un estudiante para la pantalla Mis Reservas.
  * URL: GET /api/reservas/mis-reservas
  */
 async function listarMisReservas(req, res) {
@@ -211,7 +190,7 @@ async function listarMisReservas(req, res) {
             return res.status(400).json({ error: 'Falta el parámetro obligatorio: codigoAlumno.' });
         }
 
-        const reservas = await reservasService.obtenerReservasPorAlumno(String(codigoAlumno).trim());
+        const reservas = await reservasService.obtenerReservasPorAlumno(String(codigoAlumno).trim().toUpperCase());
         return res.status(200).json(reservas);
     } catch (error) {
         console.error('[Reservas Controller Error - listarMisReservas]:', error.message);

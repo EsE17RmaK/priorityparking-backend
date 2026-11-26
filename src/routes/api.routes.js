@@ -40,8 +40,8 @@ router.post('/reservas/crear', verificarRol(['ESTUDIANTE']), reservasController.
 router.post('/reservas/cancelar', verificarRol(['ESTUDIANTE']), reservasController.cancelarReservaAlumno);
 router.get('/reservas/mis-reservas', verificarRol(['ESTUDIANTE', 'ADMIN']), reservasController.listarMisReservas);
 
-// 3. Administración UTP (Exclusivo rol ADMIN)
-router.get('/admin/aforo', verificarRol(['ADMIN', 'GARITA']), adminController.obtenerAforo);
+// 3. Administración UTP 
+router.get('/admin/aforo', verificarRol(['ESTUDIANTE', 'ADMIN', 'GARITA']), adminController.obtenerAforo);
 router.put('/admin/aforo', verificarRol(['ADMIN']), adminController.configurarAforoMensual);
 router.post('/admin/garitas', verificarRol(['ADMIN']), adminController.registrarGarita);
 router.get('/admin/garitas', verificarRol(['ADMIN']), adminController.obtenerGaritas);
