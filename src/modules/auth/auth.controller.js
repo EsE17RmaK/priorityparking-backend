@@ -1,5 +1,5 @@
 // src/modules/auth/auth.controller.js
-const jwt = require('jsonwebtoken'); // Importar JWT al inicio del archivo
+const jwt = require('jsonwebtoken');
 const authService = require('./auth.service');
 
 /**
@@ -9,7 +9,6 @@ async function solicitarOtp(req, res) {
     const { correo } = req.body;
 
     try {
-        // 1. Validar el formato del correo institucional de la UTP
         const regexUtp = /^[a-zA-Z0-9._%+-]+@utp\.edu\.pe$/;
         if (!regexUtp.test(correo)) {
             return res.status(400).json({ 
@@ -17,21 +16,15 @@ async function solicitarOtp(req, res) {
             });
         }
 
-        // 2. Realizar la consulta a la base de datos
         const resultadoBD = await authService.buscarEstudiantePorCorreo(correo);
-        
-        // 🚀 CONTROL DE EXTRAE-FILAS DEFENSIVO: 
-        // Detecta automáticamente si el servicio devolvió el array completo o la fila [0] ya extraída.
         const estudiante = Array.isArray(resultadoBD) ? resultadoBD[0] : resultadoBD;
 
-        // 3. Validar si el estudiante existe físicamente en el sistema
         if (!estudiante) {
             return res.status(404).json({ 
                 error: 'El estudiante no se encuentra registrado en el sistema institucional actual.' 
             });
         }
 
-        // 🔒 GUARDRAIL DE PENALIZACIONES: Verificar si cuenta con bloqueos por inasistencia (No-Show)
         const penalizacion = await authService.verificarEstudiantePenalizado(estudiante.codigoAlumno);
         if (penalizacion.isPenalized) {
             const fechaFormateada = new Date(penalizacion.fechaFin).toLocaleString('es-PE');
@@ -40,10 +33,8 @@ async function solicitarOtp(req, res) {
             });
         }
 
-        // 4. Evaluación de las Reglas de Negocio Académicas y Financieras del MVP
         if (!estudiante.esAptoParking) {
             let motivosRechazo = [];
-            
             if (!estudiante.estaAlDiaPagos) {
                 motivosRechazo.push("Presentas deudas pendientes en tus cuotas académicas.");
             }
@@ -54,22 +45,17 @@ async function solicitarOtp(req, res) {
                 motivosRechazo.push(`Tu promedio ponderado es de ${estudiante.promedioPonderado}, siendo la nota mínima requerida 14.00.`);
             }
 
-            const mensajeFinalError = `Acceso Denegado PriorityParking: No cumples con los requisitos del día de hoy debido a: ${motivosRechazo.join(" y ")}`;
-            return res.status(403).json({ error: mensajeFinalError });
+            return res.status(403).json({ 
+                error: `Acceso Denegado PriorityParking: No cumples con los requisitos del día de hoy debido a: ${motivosRechazo.join(" y ")}` 
+            });
         }
 
-        // 5. Generar número aleatorio seguro de 6 dígitos para el token
-        //const codigoOtp = Math.floor(100000 + Math.random() * 900000).toString();
-        const codigoOtp = "000000"; // Para pruebas de desarrollo, se puede usar un OTP fijo. Cambiar a aleatorio en producción.
-        
-        // 6. Registrar log transaccional en PostgreSQL y despachar código
-        await authService.registrarLogOtp(estudiante.codigoAlumno, codigoOtp, correo);
-        
+        const codigoOtp = "000000"; 
+        await authService.registrarLogOtp(estudiante.codigoAlumno, codigoOtp);
         console.log(`\n📬 [Seguridad MVP] Código OTP generado para ${correo}: ${codigoOtp}\n`);
 
-        // 7. Responder exitosamente para habilitar la casilla en el Frontend
         return res.status(200).json({ 
-            mensaje: 'Código de verificación generado exitosamente. Revisa tu bandeja o la consola de desarrollo.',
+            mensaje: 'Código de verificación generado exitosamente.',
             codigoAlumno: estudiante.codigoAlumno
         });
 
@@ -79,64 +65,50 @@ async function solicitarOtp(req, res) {
     }
 }
 
-
-
-
 /**
- * PASO 2: Verificar Código OTP con Base de Datos y Generación Real de JWT
+ * PASO 2: Verificar Código OTP (Estudiantes) o Credenciales de Sistema (Admin/Garita)
  */
 async function verificarOtp(req, res) {
     const { codigoAlumno, otp } = req.body;
 
-    // Validación de parámetros obligatorios de entrada
     if (!codigoAlumno || !otp) {
-        return res.status(400).json({ error: 'Faltan parámetros requeridos (codigoAlumno, otp).' });
+        return res.status(400).json({ error: 'Faltan parámetros requeridos.' });
     }
 
     try {
         let esValido = false;
         let rolUsuario = 'ESTUDIANTE';
-        // 1. Consulta real a la base de datos si el OTP es correcto y vigente en tiempo
-        //const esValido = await authService.validarCodigoOtp(codigoAlumno, otp);
 
-        // 🚀 ACCESO DIRECTO GARITA: Si es el operador de seguridad
-        if (codigoAlumno === 'UTP-GARITA') {
-            if (otp === 'GARITA2026') { // 🔑 Esta será la contraseña del vigilante
-                esValido = true;
-                rolUsuario = 'GARITA';
-            }
+        // 1. Validar si es un operador del sistema (ADMIN o GARITA) en PostgreSQL con bcrypt
+        const usuarioSistema = await authService.validarUsuarioSistema(codigoAlumno, otp);
+
+        if (usuarioSistema) {
+            esValido = true;
+            rolUsuario = usuarioSistema.rol;
         } else {
-            // Flujo normal de Alumnos con base de datos
+            // 2. Validar como código OTP de Estudiante
             esValido = await authService.validarCodigoOtp(codigoAlumno, otp);
         }
 
         if (!esValido) {
-            return res.status(401).json({ error: 'El código OTP ingresado es incorrecto o ha expirado.' });
+            return res.status(401).json({ error: 'Credenciales o código de verificación incorrectos.' });
         }
 
-        //console.log(`🔑 [Seguridad MVP] Acceso AUTORIZADO para el alumno ${codigoAlumno}.`);
         console.log(`🔑 [Seguridad MVP] Acceso AUTORIZADO para el rol: ${rolUsuario} (${codigoAlumno}).`);
-        // 2. Definir el Rol asignado para la rúbrica del MVP (Alumnos por defecto)
-        
-        
-        // Simulación de credenciales directas para accesos de control/maqueta
-        if (codigoAlumno === 'UTP-GARITA') rolUsuario = 'GARITA';
-        if (codigoAlumno === 'UTP-ADMIN') rolUsuario = 'ADMIN';
-        
-        
 
-        // 3. Crear el Payload (Se corrigió la variable a 'codigoAlumno' para evitar el ReferenceError 🚀)
         const payload = {
             codigo: codigoAlumno,
             rol: rolUsuario,
             sede: 'LIMA_CENTRO'
         };
 
-        // 4. Firmar y generar el Token JWT usando la librería instalada
-        const claveSecreta = process.env.JWT_SECRET || 'FirmaSecretaPriorityParking2026';
+        const claveSecreta = process.env.JWT_SECRET;
+        if (!claveSecreta) {
+            throw new Error('JWT_SECRET no configurado en variables de entorno.');
+        }
+
         const tokenJwt = jwt.sign(payload, claveSecreta, { expiresIn: '2h' });
 
-        // 5. RESPUESTA ÚNICA Y EXITOSA: Envía el mensaje, el Token y el Rol al Frontend
         return res.status(200).json({ 
             mensaje: 'Autenticación exitosa. Bienvenido a PriorityParking.',
             autorizado: true,
@@ -146,10 +118,9 @@ async function verificarOtp(req, res) {
 
     } catch (error) {
         console.error('[Auth Controller Error Real]:', error.message);
-        return res.status(500).json({ error: 'Error interno del servidor al verificar el código de acceso.' });
+        return res.status(500).json({ error: 'Error interno del servidor al verificar el acceso.' });
     }
 }
-
 
 module.exports = { 
     solicitarOtp,
