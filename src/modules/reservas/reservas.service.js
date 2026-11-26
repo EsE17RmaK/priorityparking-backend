@@ -1,10 +1,6 @@
-// src/modules/reservas/reservas.service.js
 const pool = require('../../config/database');
 const QRCode = require('qrcode');
 
-/**
- * Busca la reserva pendiente del alumno para la fecha indicada (sin exigir slot físico).
- */
 async function buscarReservaActiva(codigoAlumno, fechaReserva) {
     const query = `
         SELECT id_reserva, hora_llegada_programada, estado_reserva
@@ -18,9 +14,6 @@ async function buscarReservaActiva(codigoAlumno, fechaReserva) {
     return rows[0];
 }
 
-/**
- * Procesa el ingreso físico del vehículo pasando la reserva de PENDIENTE a EN_CURSO.
- */
 async function ejecutarIngresoTransaccional(idReserva) {
     const queryReserva = `
         UPDATE reservas 
@@ -35,9 +28,6 @@ async function ejecutarIngresoTransaccional(idReserva) {
     return rows[0];
 }
 
-/**
- * Registra la salida física del vehículo pasando la reserva de EN_CURSO a FINALIZADA.
- */
 async function ejecutarSalidaPorAlumno(codigoAlumno) {
     const query = `
         UPDATE reservas 
@@ -54,9 +44,6 @@ async function ejecutarSalidaPorAlumno(codigoAlumno) {
     return rows[0];
 }
 
-/**
- * Lista las reservas activas de hoy (PENDIENTE y EN_CURSO) para el monitor de Garita.
- */
 async function obtenerMonitorDiarioGarita() {
     const query = `
         SELECT 
@@ -78,26 +65,38 @@ async function obtenerMonitorDiarioGarita() {
     return rows;
 }
 
-/**
- * Crea una reserva de forma atómica validando el aforo total del mes menos los bloqueos del día.
- */
 async function ejecutarReservaTransaccional(codigoAlumno, codigoOtpUsado, fechaReserva, horaLlegadaProgramada) {
     const clienteBD = await pool.connect();
     try {
         await clienteBD.query('BEGIN');
 
-        // 1. Verificar que el alumno no tenga ya una reserva activa ese día
-        const dupRes = await clienteBD.query(
-            `SELECT id_reserva FROM reservas 
-             WHERE codigo_alumno = $1 AND fecha_reserva = $2 
-               AND estado_reserva IN ('PENDIENTE', 'EN_CURSO', 'COMPLETADA')`,
-            [codigoAlumno, fechaReserva]
+        const penRes = await clienteBD.query(
+            `SELECT motivo FROM historial_penalizaciones
+             WHERE codigo_alumno = $1 AND activa = true AND fecha_fin >= now()
+             LIMIT 1`,
+            [codigoAlumno]
         );
-        if (dupRes.rows.length > 0) {
-            throw new Error(`Ya cuentas con una reserva registrada para el día ${fechaReserva}.`);
+        if (penRes.rows.length > 0) {
+            throw new Error(`No puedes reservar: tienes una suspensión activa por "${penRes.rows[0].motivo}".`);
         }
 
-        // 2. Obtener capacidad mensual configurada por el Admin (o 70 por defecto)
+        const existenteRes = await clienteBD.query(
+            `SELECT id_reserva, estado_reserva FROM reservas 
+             WHERE codigo_alumno = $1 AND fecha_reserva = $2::date
+             FOR UPDATE`,
+            [codigoAlumno, fechaReserva]
+        );
+        const reservaPrevia = existenteRes.rows[0];
+
+        if (reservaPrevia) {
+            if (['PENDIENTE', 'EN_CURSO', 'COMPLETADA'].includes(reservaPrevia.estado_reserva)) {
+                throw new Error(`Ya cuentas con una reserva activa para el día ${fechaReserva}.`);
+            }
+            if (reservaPrevia.estado_reserva === 'EXPIRADA') {
+                throw new Error(`Tu reserva del ${fechaReserva} expiró por inasistencia en garita; no puedes volver a reservar hoy.`);
+            }
+        }
+
         const mesAnio = String(fechaReserva).slice(0, 7);
         const capRes = await clienteBD.query(
             `SELECT capacidad_mensual FROM configuracion_aforo 
@@ -108,14 +107,12 @@ async function ejecutarReservaTransaccional(codigoAlumno, codigoOtpUsado, fechaR
         );
         const capacidadMensual = capRes.rows[0]?.capacidad_mensual ?? 70;
 
-        // 3. Obtener cupos bloqueados por Garita para esa fecha
         const bloqRes = await clienteBD.query(
             `SELECT cupos_bloqueados FROM bloqueos_diarios WHERE fecha = $1::date`,
             [fechaReserva]
         );
         const bloqueadosDia = bloqRes.rows[0]?.cupos_bloqueados ?? 0;
 
-        // 4. Bloquear filas de reservas del día para evitar sobreventa concurrente
         const ocupadasRes = await clienteBD.query(
             `SELECT id_reserva FROM reservas 
              WHERE fecha_reserva = $1::date 
@@ -123,29 +120,35 @@ async function ejecutarReservaTransaccional(codigoAlumno, codigoOtpUsado, fechaR
              FOR UPDATE`,
             [fechaReserva]
         );
-        const cuposUsados = ocupadasRes.rows.length;
-        const disponibles = capacidadMensual - bloqueadosDia - cuposUsados;
+        const disponibles = capacidadMensual - bloqueadosDia - ocupadasRes.rows.length;
 
         if (disponibles <= 0) {
             throw new Error('Aforo completo para la fecha seleccionada. No quedan cupos disponibles.');
         }
 
-        // 5. Insertar la reserva sin asignación de slot físico (id_espacio = NULL)
-        const insertarReservaQuery = `
-            INSERT INTO reservas (codigo_alumno, id_espacio, codigo_otp_usado, fecha_reserva, hora_llegada_programada, estado_reserva)
-            VALUES ($1, NULL, $2, $3, $4, 'PENDIENTE')
-            RETURNING *;
-        `;
-        const resultadoReserva = await clienteBD.query(insertarReservaQuery, [
-            codigoAlumno,
-            codigoOtpUsado,
-            fechaReserva,
-            horaLlegadaProgramada
-        ]);
+        let resultadoReserva;
+        if (reservaPrevia && reservaPrevia.estado_reserva === 'CANCELADA') {
+            resultadoReserva = await clienteBD.query(
+                `UPDATE reservas 
+                 SET codigo_otp_usado = $1,
+                     hora_llegada_programada = $2,
+                     estado_reserva = 'PENDIENTE',
+                     id_espacio = NULL
+                 WHERE id_reserva = $3
+                 RETURNING *;`,
+                [codigoOtpUsado, horaLlegadaProgramada, reservaPrevia.id_reserva]
+            );
+        } else {
+            resultadoReserva = await clienteBD.query(
+                `INSERT INTO reservas (codigo_alumno, id_espacio, codigo_otp_usado, fecha_reserva, hora_llegada_programada, estado_reserva)
+                 VALUES ($1, NULL, $2, $3, $4, 'PENDIENTE')
+                 RETURNING *;`,
+                [codigoAlumno, codigoOtpUsado, fechaReserva, horaLlegadaProgramada]
+            );
+        }
 
         await clienteBD.query('COMMIT');
 
-        // 6. Generar credencial QR con datos de la reserva por aforo
         const payloadQR = JSON.stringify({
             idReserva: resultadoReserva.rows[0].id_reserva,
             codigoAlumno,
@@ -166,9 +169,6 @@ async function ejecutarReservaTransaccional(codigoAlumno, codigoOtpUsado, fechaR
     }
 }
 
-/**
- * Cancela una reserva pendiente de forma atómica liberando el cupo en el aforo del día.
- */
 async function ejecutarCancelacionTransaccional(codigoAlumno, fechaReserva) {
     const clienteBD = await pool.connect();
     try {
@@ -200,9 +200,6 @@ async function ejecutarCancelacionTransaccional(codigoAlumno, fechaReserva) {
     }
 }
 
-/**
- * Consulta el listado de reservas históricas y futuras de un alumno específico.
- */
 async function obtenerReservasPorAlumno(codigoAlumno) {
     const query = `
         SELECT 
